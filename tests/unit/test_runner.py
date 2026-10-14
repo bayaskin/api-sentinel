@@ -7,7 +7,7 @@ from api_sentinel.config import (
     RequestConfig,
     SentinelConfig,
 )
-from api_sentinel.runner import run_tests
+from api_sentinel.runner import _get_json_path, run_tests
 
 
 def make_config(path: str = "/health", status: int = 200) -> SentinelConfig:
@@ -154,3 +154,115 @@ def test_sends_headers_query_params_and_json_body() -> None:
 
     assert results[0].passed is True
     assert results[0].actual_status == 201
+
+
+def test_get_json_path_returns_nested_value() -> None:
+    data = {"user": {"profile": {"name": "Alex"}}}
+
+    found, value = _get_json_path(data, "user.profile.name")
+
+    assert found is True
+    assert value == "Alex"
+
+
+def test_get_json_path_returns_false_for_missing_path() -> None:
+    data = {"user": {"profile": {}}}
+
+    found, value = _get_json_path(data, "user.profile.name")
+
+    assert found is False
+    assert value is None
+
+def test_get_json_path_returns_false_when_intermediate_value_is_not_mapping() -> None:
+    data = {"user": "not-a-mapping"}
+
+    found, value = _get_json_path(data, "user.profile.name")
+
+    assert found is False
+    assert value is None
+
+
+def test_fails_when_status_mismatches_even_with_json_assertions() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            500,
+            json={"status": "error"},
+            request=request,
+        )
+
+    config = SentinelConfig(
+        base_url="https://api.example.com",
+        tests=[
+            ApiTestConfig(
+                name="Status takes precedence",
+                request=RequestConfig(method="GET", path="/health"),
+                expect=ExpectConfig(
+                    status=200,
+                    json={"status": "ok"},
+                ),
+            )
+        ],
+    )
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    try:
+        results = run_tests(config, client=client)
+    finally:
+        client.close()
+
+    assert results[0].passed is False
+    assert results[0].error == "expected 200, got 500"
+
+
+def test_json_assertion_distinguishes_boolean_from_integer() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"enabled": True}, request=request)
+
+    config = SentinelConfig(
+        base_url="https://api.example.com",
+        tests=[
+            ApiTestConfig(
+                name="Strict JSON types",
+                request=RequestConfig(method="GET", path="/health"),
+                expect=ExpectConfig(status=200, json={"enabled": 1}),
+            )
+        ],
+    )
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    try:
+        results = run_tests(config, client=client)
+    finally:
+        client.close()
+
+    assert results[0].passed is False
+    assert "expected 1, got True" in results[0].error
+
+
+def test_closes_client_created_by_runner(monkeypatch) -> None:
+    created_clients = []
+
+    class FakeClient:
+        closed = False
+
+        def __init__(self, **kwargs) -> None:
+            self.closed = False
+            created_clients.append(self)
+
+        def request(self, *args, **kwargs) -> httpx.Response:
+            request = httpx.Request("GET", "https://api.example.com/health")
+            return httpx.Response(200, request=request)
+
+        def close(self) -> None:
+            self.closed = True
+
+    monkeypatch.setattr("api_sentinel.runner.httpx.Client", FakeClient)
+
+    results = run_tests(make_config())
+
+    assert results[0].passed is True
+    assert len(created_clients) == 1
+    assert created_clients[0].closed is True
+
+
+    

@@ -15,6 +15,17 @@ class ApiTestResult:
     error: str | None = None
 
 
+def _get_json_path(data: object, path: str) -> tuple[bool, object]:
+    current = data
+
+    for part in path.split("."):
+        if not isinstance(current, dict) or part not in current:
+            return False, None
+        current = current[part]
+
+    return True, current
+
+
 def run_tests(
     config: SentinelConfig,
     *,
@@ -41,28 +52,40 @@ def run_tests(
                     )
                 actual_status = response.status_code
 
-                if actual_status == test.expect.status:
-                    results.append(
-                        ApiTestResult(
-                            name=test.name,
-                            passed=True,
-                            expected_status=test.expect.status,
-                            actual_status=actual_status,
-                        )
-                    )
+                if actual_status != test.expect.status:
+                    error = f"expected {test.expect.status}, got {actual_status}"
                 else:
-                    results.append(
-                        ApiTestResult(
-                            name=test.name,
-                            passed=False,
-                            expected_status=test.expect.status,
-                            actual_status=actual_status,
-                            error=(
-                                f"expected {test.expect.status}, "
-                                f"got {actual_status}"
-                            ),
-                        )
+                    error = None
+
+                    if test.expect.json:
+                        try:
+                            response_json = response.json()
+                        except ValueError:
+                            error = "response body is not valid JSON"
+                        else:
+                            for path, expected in test.expect.json.items():
+                                found, actual = _get_json_path(response_json, path)
+
+                                if not found:
+                                    error = f"JSON field {path!r} was not found"
+                                    break
+
+                                if type(actual) is not type(expected) or actual != expected:
+                                    error = (
+                                        f"JSON field {path!r}: expected {expected!r}, "
+                                        f"got {actual!r}"
+                                    )
+                                    break
+
+                results.append(
+                    ApiTestResult(
+                        name=test.name,
+                        passed=error is None,
+                        expected_status=test.expect.status,
+                        actual_status=actual_status,
+                        error=error,
                     )
+                )
             except httpx.HTTPError as exc:
                 results.append(
                     ApiTestResult(

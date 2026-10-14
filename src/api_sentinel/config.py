@@ -25,6 +25,7 @@ class RequestConfig:
 @dataclass(frozen=True)
 class ExpectConfig:
     status: int
+    json: dict[str, object] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -54,6 +55,30 @@ def _string_mapping(value: object, field: str) -> dict[str, str]:
             raise ConfigError(f"{field} must contain only string keys and values")
 
     return mapping
+
+
+def _json_assertions(value: object, field_name: str) -> dict[str, object]:
+    assertions = _require_mapping(value, field_name)
+
+    for path, expected in assertions.items():
+        if not isinstance(path, str) or not path.strip():
+            raise ConfigError(
+                f"{field_name} must contain non-empty string paths"
+            )
+
+        if any(not part for part in path.split(".")):
+            raise ConfigError(
+                f"{field_name} contains an invalid JSON path: {path!r}"
+            )
+
+        try:
+            json.dumps(expected, allow_nan=False)
+        except (TypeError, ValueError) as exc:
+            raise ConfigError(
+                f"{field_name}.{path} must contain a valid JSON value"
+            ) from exc
+
+    return assertions
 
 
 def load_config(path: str | Path) -> SentinelConfig:
@@ -153,6 +178,11 @@ def load_config(path: str | Path) -> SentinelConfig:
                 f"{prefix}.expect.status must be an HTTP status code from 100 to 599"
             )
 
+        json_assertions = _json_assertions(
+            expect_data.get("json", {}),
+            f"{prefix}.expect.json",
+        )
+
         tests.append(
             ApiTestConfig(
                 name=name.strip(),
@@ -163,7 +193,7 @@ def load_config(path: str | Path) -> SentinelConfig:
                     params=params,
                     json=json_body,
                 ),
-                expect=ExpectConfig(status=status),
+                expect=ExpectConfig(status=status, json=json_assertions),
             )
         )
 

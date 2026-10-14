@@ -14,6 +14,7 @@ API Sentinel runs HTTP checks defined in a YAML configuration file, validates re
 - **Docker support** — run checks in a container without installing Python dependencies on the host.
 - **Automated tests** — pytest, Ruff, and a GitHub Actions workflow.
 - **Coverage enforcement** — CI requires at least 90% test coverage.
+- **JSON response assertions** — validate expected values in nested JSON fields using dot-separated paths.
 
 ## Requirements
 
@@ -85,6 +86,9 @@ tests:
       path: /json
     expect:
       status: 200
+      json:
+        slideshow.author: "Yours Truly"
+        slideshow.slides: 2
 ```
 
 ### Configuration fields

@@ -277,3 +277,25 @@ tests:
 
     with pytest.raises(ConfigError, match="request.json"):
         load_config(config_file)
+
+
+def test_rejects_invalid_json_assertion_path(tmp_path: Path) -> None:
+    config_file = tmp_path / "tests.yaml"
+    config_file.write_text(
+        """
+base_url: https://api.example.com
+tests:
+  - name: Invalid assertion
+    request:
+      method: GET
+      path: /health
+    expect:
+      status: 200
+      json:
+        "user..name": example
+""",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ConfigError, match="invalid JSON path"):
+        load_config(config_file)

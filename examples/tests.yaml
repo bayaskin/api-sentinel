@@ -15,3 +15,12 @@ tests:
       path: /json
     expect:
       status: 200
+
+  - name: JSON response contains slideshow author
+    request:
+      method: GET
+      path: /json
+    expect:
+      status: 200
+      json:
+        slideshow.author: "Yours Truly"
