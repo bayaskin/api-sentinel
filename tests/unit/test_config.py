@@ -188,3 +188,92 @@ tests: []
 
     with pytest.raises(ConfigError, match="tests"):
         load_config(config_file)
+
+
+
+def test_loads_request_options(tmp_path: Path) -> None:
+    config_file = tmp_path / "tests.yaml"
+    config_file.write_text(
+        """
+base_url: https://api.example.com
+tests:
+  - name: Create resource
+    request:
+      method: POST
+      path: /resources
+      headers:
+        Accept: application/json
+        X-Test: enabled
+      params:
+        page: "2"
+      json:
+        name: example
+        enabled: true
+    expect:
+      status: 201
+""",
+        encoding="utf-8",
+    )
+
+    config = load_config(config_file)
+    request = config.tests[0].request
+
+    assert request.headers == {
+        "Accept": "application/json",
+        "X-Test": "enabled",
+    }
+    assert request.params == {"page": "2"}
+    assert request.json == {"name": "example", "enabled": True}
+
+
+def test_optional_request_options_default_to_empty() -> None:
+    from api_sentinel.config import RequestConfig
+
+    request = RequestConfig(method="GET", path="/health")
+
+    assert request.headers == {}
+    assert request.params == {}
+    assert request.json is None
+
+
+def test_rejects_non_string_header_values(tmp_path: Path) -> None:
+    config_file = tmp_path / "tests.yaml"
+    config_file.write_text(
+        """
+base_url: https://api.example.com
+tests:
+  - name: Invalid headers
+    request:
+      method: GET
+      path: /health
+      headers:
+        X-Retry: 3
+    expect:
+      status: 200
+""",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ConfigError, match="headers"):
+        load_config(config_file)
+
+
+def test_rejects_invalid_json_body(tmp_path: Path) -> None:
+    config_file = tmp_path / "tests.yaml"
+    config_file.write_text(
+        """
+base_url: https://api.example.com
+tests:
+  - name: Invalid body
+    request:
+      method: POST
+      path: /resources
+      json: "not an object"
+    expect:
+      status: 201
+""",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ConfigError, match="request.json"):
+        load_config(config_file)

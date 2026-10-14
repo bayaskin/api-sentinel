@@ -32,7 +32,13 @@ def run_tests(
             url = f"{config.base_url.rstrip('/')}{test.request.path}"
 
             try:
-                response = client.request(test.request.method, url)
+                response = client.request(
+                    test.request.method,
+                    url,
+                    headers=test.request.headers,
+                    params=test.request.params,
+                    json=test.request.json,
+                    )
                 actual_status = response.status_code
 
                 if actual_status == test.expect.status:

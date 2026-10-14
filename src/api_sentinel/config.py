@@ -1,5 +1,6 @@
 
-from dataclasses import dataclass
+import json
+from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -16,6 +17,9 @@ class ConfigError(Exception):
 class RequestConfig:
     method: str
     path: str
+    headers: dict[str, str] = field(default_factory=dict)
+    params: dict[str, str] = field(default_factory=dict)
+    json: dict | list | None = None
 
 
 @dataclass(frozen=True)
@@ -40,6 +44,16 @@ def _require_mapping(value: object, field: str) -> dict:
     if not isinstance(value, dict):
         raise ConfigError(f"{field} must be a mapping")
     return value
+
+
+def _string_mapping(value: object, field: str) -> dict[str, str]:
+    mapping = _require_mapping(value, field)
+
+    for key, item in mapping.items():
+        if not isinstance(key, str) or not isinstance(item, str):
+            raise ConfigError(f"{field} must contain only string keys and values")
+
+    return mapping
 
 
 def load_config(path: str | Path) -> SentinelConfig:
@@ -105,6 +119,26 @@ def load_config(path: str | Path) -> SentinelConfig:
                 f"{prefix}.request.path must start with a single slash"
             )
 
+        headers = _string_mapping(
+            request_data.get("headers", {}), f"{prefix}.request.headers"
+        )
+        params = _string_mapping(
+            request_data.get("params", {}), f"{prefix}.request.params"
+        )
+
+        json_body = request_data.get("json")
+        if json_body is not None:
+            if not isinstance(json_body, (dict, list)):
+                raise ConfigError(
+                    f"{prefix}.request.json must be a mapping or list"
+                )
+            try:
+                json.dumps(json_body, allow_nan=False)
+            except (TypeError, ValueError) as exc:
+                raise ConfigError(
+                    f"{prefix}.request.json must contain valid JSON values"
+                ) from exc
+
         expect_data = _require_mapping(
             test_data.get("expect"), f"{prefix}.expect"
         )
@@ -125,6 +159,9 @@ def load_config(path: str | Path) -> SentinelConfig:
                 request=RequestConfig(
                     method=method.upper(),
                     path=request_path,
+                    headers=headers,
+                    params=params,
+                    json=json_body,
                 ),
                 expect=ExpectConfig(status=status),
             )

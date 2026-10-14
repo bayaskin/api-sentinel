@@ -109,3 +109,48 @@ def test_records_http_error() -> None:
     assert results[0].passed is False
     assert results[0].actual_status is None
     assert "connection refused" in results[0].error
+
+
+
+def test_sends_headers_query_params_and_json_body() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.method == "POST"
+        assert str(request.url) == (
+            "https://api.example.com/resources?page=2"
+        )
+        assert request.headers["accept"] == "application/json"
+        assert request.headers["x-test"] == "enabled"
+        assert request.headers["content-type"] == "application/json"
+        assert request.read() == b'{"name":"example","enabled":true}'
+
+        return httpx.Response(201, request=request)
+
+    config = SentinelConfig(
+        base_url="https://api.example.com",
+        tests=[
+            ApiTestConfig(
+                name="Create resource",
+                request=RequestConfig(
+                    method="POST",
+                    path="/resources",
+                    headers={
+                        "Accept": "application/json",
+                        "X-Test": "enabled",
+                    },
+                    params={"page": "2"},
+                    json={"name": "example", "enabled": True},
+                ),
+                expect=ExpectConfig(status=201),
+            )
+        ],
+    )
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+
+    try:
+        results = run_tests(config, client=client)
+    finally:
+        client.close()
+
+    assert results[0].passed is True
+    assert results[0].actual_status == 201
