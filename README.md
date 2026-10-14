@@ -53,6 +53,9 @@ Run the included example:
 ```bash
 api-sentinel run examples/tests.yaml
 ```
+```bash
+api-sentinel run examples/tests.yaml --junit-xml report.xml
+```
 
 Example output:
 

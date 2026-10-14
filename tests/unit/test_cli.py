@@ -71,3 +71,61 @@ def test_returns_two_for_invalid_configuration(monkeypatch, capsys) -> None:
     captured = capsys.readouterr()
     assert exit_code == 2
     assert "Configuration error: invalid configuration" in captured.err
+
+
+def test_writes_junit_report_when_requested(
+    monkeypatch,
+    tmp_path,
+    capsys,
+) -> None:
+    from xml.etree import ElementTree as ET
+
+    monkeypatch.setattr(
+        "api_sentinel.cli.load_config",
+        lambda path: object(),
+    )
+    monkeypatch.setattr(
+        "api_sentinel.cli.run_tests",
+        lambda config: [
+            ApiTestResult(
+                name="Health endpoint",
+                passed=True,
+                expected_status=200,
+                actual_status=200,
+            )
+        ],
+    )
+
+    report = tmp_path / "junit.xml"
+    exit_code = main(["run", "tests.yaml", "--junit-xml", str(report)])
+
+    assert exit_code == 0
+    assert ET.parse(report).getroot().attrib["tests"] == "1"
+    assert "JUnit report written" in capsys.readouterr().out
+
+
+def test_returns_two_when_junit_report_cannot_be_written(
+    monkeypatch,
+    capsys,
+) -> None:
+    monkeypatch.setattr(
+        "api_sentinel.cli.load_config",
+        lambda path: object(),
+    )
+    monkeypatch.setattr(
+        "api_sentinel.cli.run_tests",
+        lambda config: [],
+    )
+
+    def fail_to_write(results, output_path):
+        raise OSError("permission denied")
+
+    monkeypatch.setattr("api_sentinel.cli.write_junit_xml", fail_to_write)
+
+    exit_code = main(
+        ["run", "tests.yaml", "--junit-xml", "report.xml"]
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 2
+    assert "Error writing JUnit report: permission denied" in captured.err

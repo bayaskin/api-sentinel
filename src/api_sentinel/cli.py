@@ -4,6 +4,7 @@ import sys
 from collections.abc import Sequence
 
 from api_sentinel.config import ConfigError, load_config
+from api_sentinel.junit import write_junit_xml
 from api_sentinel.runner import run_tests
 
 
@@ -22,6 +23,11 @@ def build_parser() -> argparse.ArgumentParser:
         "config",
         help="Path to the YAML configuration file.",
     )
+    run_parser.add_argument(
+        "--junit-xml",
+        metavar="PATH",
+        help="Write test results to a JUnit XML report.",
+    )
 
     return parser
 
@@ -38,6 +44,18 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 2
 
         results = run_tests(config)
+
+        if args.junit_xml:
+            try:
+                write_junit_xml(results, args.junit_xml)
+            except OSError as exc:
+                print(
+                    f"Error writing JUnit report: {exc}",
+                    file=sys.stderr,
+                )
+                return 2
+
+            print(f"JUnit report written to {args.junit_xml}")
 
         for result in results:
             label = "PASS" if result.passed else "FAIL"
