@@ -55,6 +55,36 @@ jobs:
       - name: Build Python distributions
         run: python -m build
 
+      - name: Verify clean installation
+        run: |
+          python -m venv /tmp/api-sentinel-clean
+          /tmp/api-sentinel-clean/bin/python -m pip install dist/*.whl
+
+          python examples/mock_api.py > /tmp/api-sentinel-mock.log 2>&1 &
+          MOCK_API_PID=$!
+          trap 'kill "$MOCK_API_PID" 2>/dev/null || true' EXIT
+
+          for i in $(seq 1 40); do
+            if curl -fsS http://127.0.0.1:8765/status/200 > /dev/null; then
+              break
+            fi
+            sleep 0.25
+          done
+
+          curl -fsS http://127.0.0.1:8765/status/200 > /dev/null
+
+          /tmp/api-sentinel-clean/bin/api-sentinel run \
+            examples/local-tests.yaml \
+            --junit-xml clean-install-report.xml
+
+      - name: Upload clean-install report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: api-sentinel-clean-install-report
+          path: clean-install-report.xml
+          if-no-files-found: warn
+
       - name: Upload Python distributions
         uses: actions/upload-artifact@v4
         with:
