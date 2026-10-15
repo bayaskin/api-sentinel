@@ -1,0 +1,14 @@
+<?xml version='1.0' encoding='utf-8'?>
+<testsuite name="API Sentinel Security" tests="3" failures="2" errors="0" skipped="0">
+  <testcase classname="api_sentinel.security" name="Detect database error disclosure" time="0">
+    <failure message="Potential database error disclosure" type="sql_error_disclosure">Severity: medium
+Evidence: MySQL error signature found in response body
+Remediation: Return a generic client-facing error and keep database diagnostics in protected server-side logs.</failure>
+  </testcase>
+  <testcase classname="api_sentinel.security" name="Detect unescaped HTML reflection" time="0">
+    <failure message="Potential unescaped HTML reflection" type="unescaped_html_reflection">Severity: medium
+Evidence: The supplied HTML-like marker appears verbatim in the response
+Remediation: Apply context-appropriate output encoding and validate input. Use browser-based testing to determine whether execution is possible.</failure>
+  </testcase>
+  <testcase classname="api_sentinel.security" name="Verify HTML reflection is escaped" time="0" />
+</testsuite>

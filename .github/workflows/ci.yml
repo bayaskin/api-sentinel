@@ -44,12 +44,33 @@ jobs:
 
           api-sentinel run examples/local-tests.yaml --junit-xml report.xml
 
+          api-sentinel security examples/security-tests.yaml \
+            --junit-xml security-report.xml || status=$?
+
+          test "${status:-0}" -eq 1
+
+          python -c "
+          from xml.etree import ElementTree as ET
+          root = ET.parse('security-report.xml').getroot()
+          assert root.attrib['tests'] == '3'
+          assert root.attrib['failures'] == '2'
+          assert root.attrib['errors'] == '0'
+          "
+
       - name: Upload JUnit report
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: api-sentinel-junit-report
           path: report.xml
+          if-no-files-found: warn
+
+      - name: Upload security JUnit report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: api-sentinel-security-report
+          path: security-report.xml
           if-no-files-found: warn
 
       - name: Build Python distributions
