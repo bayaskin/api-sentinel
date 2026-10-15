@@ -1,3 +1,4 @@
+
 name: CI
 
 on:
@@ -28,3 +29,25 @@ jobs:
 
       - name: Run tests with coverage
         run: pytest --cov=api_sentinel --cov-report=term-missing --cov-fail-under=90
+
+      - name: Run local API smoke tests
+        run: |
+          python examples/mock_api.py > /tmp/api-sentinel-mock.log 2>&1 &
+          echo $! > /tmp/api-sentinel-mock.pid
+
+          for i in {1..20}; do
+            if python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8765/status/200', timeout=1)" 2>/dev/null; then
+              break
+            fi
+            sleep 0.25
+          done
+
+          api-sentinel run examples/local-tests.yaml --junit-xml report.xml
+
+      - name: Upload JUnit report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: api-sentinel-junit-report
+          path: report.xml
+          if-no-files-found: warn

@@ -1,0 +1,9 @@
+base_url: http://127.0.0.1:8765
+
+tests:
+  - name: Demonstrate expected status mismatch
+    request:
+      method: GET
+      path: /status/503
+    expect:
+      status: 200

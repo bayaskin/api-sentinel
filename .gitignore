@@ -10,3 +10,4 @@ build/
 *.egg-info/
 .env
 report.xml
+failure-report.xml

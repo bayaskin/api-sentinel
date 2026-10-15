@@ -68,6 +68,17 @@ Results: 2 passed, 0 failed
 
 The example uses [httpbin](https://httpbin.org/), a public HTTP testing service, so it requires network access.
 
+How to rub local demo:
+
+# Terminal 1
+```bash
+python examples/mock_api.py
+```
+# Terminal 2
+```bash
+api-sentinel run examples/local-tests.yaml --junit-xml report.xml
+```
+
 ## Configuration
 
 Create a YAML file describing the API and its checks:
