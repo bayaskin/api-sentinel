@@ -1,9 +1,13 @@
 
 from dataclasses import dataclass
+from itertools import islice
 
 import httpx
+from jsonschema import Draft202012Validator, FormatChecker
 
 from api_sentinel.config import SentinelConfig
+
+MAX_SCHEMA_ERRORS = 10
 
 
 @dataclass(frozen=True)
@@ -24,6 +28,48 @@ def _get_json_path(data: object, path: str) -> tuple[bool, object]:
         current = current[part]
 
     return True, current
+
+
+def _instance_path(path: list[str | int]) -> str:
+    formatted = "$"
+    for part in path:
+        if isinstance(part, int):
+            formatted += f"[{part}]"
+        else:
+            formatted += f"[{part!r}]"
+    return formatted
+
+
+def _schema_errors(schema: dict[str, object], response_json: object) -> list[str]:
+    validator = Draft202012Validator(schema, format_checker=FormatChecker())
+    errors = list(islice(validator.iter_errors(response_json), MAX_SCHEMA_ERRORS + 1))
+    has_more_errors = len(errors) > MAX_SCHEMA_ERRORS
+    messages = [
+        f"response schema {error.validator!r} constraint failed at "
+        f"{_instance_path(list(error.path))}: expected {error.validator_value!r}"
+        for error in errors[:MAX_SCHEMA_ERRORS]
+    ]
+    if has_more_errors:
+        messages.append(
+            f"additional schema violations omitted after {MAX_SCHEMA_ERRORS}"
+        )
+    return messages
+
+
+def _json_assertion_errors(
+    assertions: dict[str, object], response_json: object
+) -> list[str]:
+    errors = []
+    for path, expected in assertions.items():
+        found, actual = _get_json_path(response_json, path)
+
+        if not found:
+            errors.append(f"JSON field {path!r} was not found")
+        elif type(actual) is not type(expected) or actual != expected:
+            errors.append(
+                f"JSON field {path!r}: expected {expected!r}, got {actual!r}"
+            )
+    return errors
 
 
 def run_tests(
@@ -57,25 +103,29 @@ def run_tests(
                 else:
                     error = None
 
-                    if test.expect.json:
+                    if test.expect.json or test.expect.schema is not None:
                         try:
                             response_json = response.json()
                         except ValueError:
                             error = "response body is not valid JSON"
                         else:
-                            for path, expected in test.expect.json.items():
-                                found, actual = _get_json_path(response_json, path)
-
-                                if not found:
-                                    error = f"JSON field {path!r} was not found"
-                                    break
-
-                                if type(actual) is not type(expected) or actual != expected:
-                                    error = (
-                                        f"JSON field {path!r}: expected {expected!r}, "
-                                        f"got {actual!r}"
+                            if test.expect.schema is None:
+                                assertion_errors = _json_assertion_errors(
+                                    test.expect.json, response_json
+                                )
+                                if assertion_errors:
+                                    error = assertion_errors[0]
+                            else:
+                                errors = _schema_errors(
+                                    test.expect.schema, response_json
+                                )
+                                errors.extend(
+                                    _json_assertion_errors(
+                                        test.expect.json, response_json
                                     )
-                                    break
+                                )
+                                if errors:
+                                    error = "; ".join(errors)
 
                 results.append(
                     ApiTestResult(

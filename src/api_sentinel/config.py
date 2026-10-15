@@ -5,12 +5,17 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 import yaml
+from jsonschema import Draft202012Validator
+from jsonschema.exceptions import SchemaError
 
 SUPPORTED_METHODS = {"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"}
 
 
 class ConfigError(Exception):
     """Raised when an API Sentinel configuration is invalid."""
+
+
+DRAFT_2020_12_SCHEMA_URI = Draft202012Validator.META_SCHEMA["$id"]
 
 
 @dataclass(frozen=True)
@@ -26,6 +31,7 @@ class RequestConfig:
 class ExpectConfig:
     status: int
     json: dict[str, object] = field(default_factory=dict)
+    schema: dict[str, object] | None = None
 
 
 @dataclass(frozen=True)
@@ -79,6 +85,28 @@ def _json_assertions(value: object, field_name: str) -> dict[str, object]:
             ) from exc
 
     return assertions
+
+
+def _json_schema(value: object, field_name: str) -> dict[str, object]:
+    schema = _require_mapping(value, field_name)
+
+    if (
+        "$schema" in schema
+        and schema["$schema"] != DRAFT_2020_12_SCHEMA_URI
+    ):
+        raise ConfigError(
+            f"{field_name} declares an unsupported $schema dialect "
+            f"{schema['$schema']!r}; only {DRAFT_2020_12_SCHEMA_URI!r} is supported"
+        )
+
+    try:
+        json.dumps(schema, allow_nan=False)
+        Draft202012Validator.check_schema(schema)
+    except (TypeError, ValueError, SchemaError) as exc:
+        detail = exc.message if isinstance(exc, SchemaError) else str(exc)
+        raise ConfigError(f"{field_name} is invalid: {detail}") from exc
+
+    return schema
 
 
 def load_config(path: str | Path) -> SentinelConfig:
@@ -182,6 +210,11 @@ def load_config(path: str | Path) -> SentinelConfig:
             expect_data.get("json", {}),
             f"{prefix}.expect.json",
         )
+        response_schema = None
+        if "schema" in expect_data:
+            response_schema = _json_schema(
+                expect_data["schema"], f"{prefix}.expect.schema"
+            )
 
         tests.append(
             ApiTestConfig(
@@ -193,7 +226,11 @@ def load_config(path: str | Path) -> SentinelConfig:
                     params=params,
                     json=json_body,
                 ),
-                expect=ExpectConfig(status=status, json=json_assertions),
+                expect=ExpectConfig(
+                    status=status,
+                    json=json_assertions,
+                    schema=response_schema,
+                ),
             )
         )
 

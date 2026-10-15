@@ -1,4 +1,5 @@
 import json
+import os
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlsplit
 
@@ -23,6 +24,24 @@ class MockApiHandler(BaseHTTPRequestHandler):
                         "slides": 2,
                     }
                 },
+            )
+        elif path == "/users":
+            self._respond(
+                200,
+                {
+                    "users": [
+                        {
+                            "id": 7,
+                            "email": "ada@example.com",
+                            "profile": {"display_name": "Ada"},
+                        }
+                    ]
+                },
+            )
+        elif path == "/users/invalid-email":
+            self._respond(
+                200,
+                {"users": [{"id": 7, "email": "not-an-email"}]},
             )
         elif path == "/security/sql-error":
             self._respond(
@@ -74,8 +93,9 @@ class MockApiHandler(BaseHTTPRequestHandler):
 
 
 def main() -> None:
-    server = ThreadingHTTPServer(("127.0.0.1", 8765), MockApiHandler)
-    print("Mock API listening on http://127.0.0.1:8765", flush=True)
+    port = int(os.environ.get("API_SENTINEL_MOCK_PORT", "8765"))
+    server = ThreadingHTTPServer(("127.0.0.1", port), MockApiHandler)
+    print(f"Mock API listening on http://127.0.0.1:{port}", flush=True)
 
     try:
         server.serve_forever()

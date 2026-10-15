@@ -1,0 +1,45 @@
+base_url: http://127.0.0.1:8765
+
+tests:
+  - name: Validate nested user data and email format
+    request:
+      method: GET
+      path: /users
+    expect:
+      status: 200
+      schema:
+        type: object
+        required: [users]
+        properties:
+          users:
+            type: array
+            items:
+              type: object
+              required: [id, email, profile]
+              properties:
+                id:
+                  type: integer
+                email:
+                  type: string
+                  format: email
+                profile:
+                  type: object
+                  required: [display_name]
+                  properties:
+                    display_name:
+                      type: string
+      json:
+        users:
+          - id: 7
+            email: ada@example.com
+            profile:
+              display_name: Ada
+
+  - name: Validate an expected not-found response
+    request:
+      method: GET
+      path: /does-not-exist
+    expect:
+      status: 404
+      json:
+        error: Not found
