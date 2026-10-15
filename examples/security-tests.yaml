@@ -1,0 +1,19 @@
+# Use only against systems you own or are explicitly authorized to test.
+base_url: http://127.0.0.1:8765
+
+probes:
+  - name: Detect database error disclosure
+    path: /security/sql-error
+    check: sql_error_disclosure
+
+  - name: Detect unescaped HTML reflection
+    path: /security/reflect
+    check: unescaped_html_reflection
+    parameter: marker
+    marker: "<b>API-SENTINEL-TEST</b>"
+
+  - name: Verify HTML reflection is escaped
+    path: /security/reflect-escaped
+    check: unescaped_html_reflection
+    parameter: marker
+    marker: "<b>API-SENTINEL-TEST</b>"

@@ -1,12 +1,13 @@
-
 import json
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, urlsplit
 
 
 class MockApiHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
-        path = urlsplit(self.path).path
+        parsed = urlsplit(self.path)
+        path = parsed.path
+        params = parse_qs(parsed.query)
 
         if path == "/status/200":
             self._respond(200, {"status": "ok"})
@@ -23,13 +24,47 @@ class MockApiHandler(BaseHTTPRequestHandler):
                     }
                 },
             )
+        elif path == "/security/sql-error":
+            self._respond(
+                500,
+                {
+                    "error": (
+                        "Database error: You have an error in your SQL syntax; "
+                        "check the manual for your MySQL server version"
+                    )
+                },
+            )
+        elif path == "/security/reflect":
+            marker = params.get("marker", [""])[0]
+            body = f"<html><body>Search result: {marker}</body></html>"
+            self._respond(200, body, content_type="text/html")
+        elif path == "/security/reflect-escaped":
+            marker = params.get("marker", [""])[0]
+            escaped = (
+                marker.replace("&", "&amp;")
+                .replace("<", "&lt;")
+                .replace(">", "&gt;")
+                .replace('"', "&quot;")
+                .replace("'", "&#x27;")
+            )
+            body = f"<html><body>Search result: {escaped}</body></html>"
+            self._respond(200, body, content_type="text/html")
         else:
             self._respond(404, {"error": "Not found"})
 
-    def _respond(self, status: int, payload: dict) -> None:
-        body = json.dumps(payload).encode("utf-8")
+    def _respond(
+        self,
+        status: int,
+        payload: dict | str,
+        content_type: str = "application/json",
+    ) -> None:
+        if isinstance(payload, str):
+            body = payload.encode("utf-8")
+        else:
+            body = json.dumps(payload).encode("utf-8")
+
         self.send_response(status)
-        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
