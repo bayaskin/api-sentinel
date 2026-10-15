@@ -56,3 +56,31 @@ def test_writes_failure_when_no_http_status_is_available(tmp_path) -> None:
     assert root.attrib["failures"] == "1"
     assert failure is not None
     assert failure.attrib["message"] == "Connection refused"
+
+
+
+
+
+
+def test_escapes_special_characters_in_junit_report(tmp_path) -> None:
+    report = tmp_path / "junit.xml"
+    results = [
+        ApiTestResult(
+            name="User <admin> & permissions",
+            passed=False,
+            expected_status=200,
+            actual_status=500,
+            error='Expected "A & B", got "<unknown>"',
+        )
+    ]
+
+    write_junit_xml(results, report)
+
+    root = ET.parse(report).getroot()
+    testcase = root.find("testcase")
+    assert testcase is not None
+    failure = testcase.find("failure")
+    assert failure is not None
+
+    assert testcase.attrib["name"] == "User <admin> & permissions"
+    assert failure.attrib["message"] == 'Expected "A & B", got "<unknown>"'

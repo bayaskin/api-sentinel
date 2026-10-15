@@ -299,3 +299,11 @@ tests:
 
     with pytest.raises(ConfigError, match="invalid JSON path"):
         load_config(config_file)
+
+
+def test_rejects_whitespace_only_yaml(tmp_path: Path) -> None:
+    config_file = tmp_path / "tests.yaml"
+    config_file.write_text("   \n\n\t  \n", encoding="utf-8")
+
+    with pytest.raises(ConfigError):
+        load_config(config_file)

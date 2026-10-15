@@ -265,4 +265,45 @@ def test_closes_client_created_by_runner(monkeypatch) -> None:
     assert created_clients[0].closed is True
 
 
-    
+
+def test_timeout_fails_one_test_and_runner_continues() -> None:
+    config = SentinelConfig(
+        base_url="https://api.example.com",
+        tests=[
+            ApiTestConfig(
+                name="Slow endpoint",
+                request=RequestConfig(method="GET", path="/slow"),
+                expect=ExpectConfig(status=200),
+            ),
+            ApiTestConfig(
+                name="Healthy endpoint",
+                request=RequestConfig(method="GET", path="/health"),
+                expect=ExpectConfig(status=200),
+            ),
+        ],
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/slow":
+            raise httpx.ReadTimeout("request timed out", request=request)
+        return httpx.Response(200, request=request)
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+
+    try:
+        results = run_tests(config, client=client)
+    finally:
+        client.close()
+
+    assert len(results) == 2
+
+    assert results[0].name == "Slow endpoint"
+    assert results[0].passed is False
+    assert results[0].actual_status is None
+    assert "request timed out" in results[0].error
+
+    assert results[1].name == "Healthy endpoint"
+    assert results[1].passed is True
+    assert results[1].actual_status == 200
+
+
