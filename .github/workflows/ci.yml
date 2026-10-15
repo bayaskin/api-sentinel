@@ -51,3 +51,13 @@ jobs:
           name: api-sentinel-junit-report
           path: report.xml
           if-no-files-found: warn
+
+      - name: Build Python distributions
+        run: python -m build
+
+            - name: Upload Python distributions
+        uses: actions/upload-artifact@v4
+        with:
+          name: api-sentinel-distributions
+          path: dist/
+          if-no-files-found: error
