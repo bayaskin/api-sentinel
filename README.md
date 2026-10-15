@@ -11,10 +11,11 @@ API Sentinel runs HTTP checks defined in a YAML configuration file, validates ex
 - **Request configuration** — configure request headers, query parameters, and JSON bodies.
 - **Response validation** — verify expected HTTP status codes and nested JSON fields using dot-separated paths.
 - **Failure reporting** — reports unexpected status codes and HTTP request errors while continuing through the remaining checks.
-- **JUnit XML reports** — export results for CI systems.
+- **JUnit XML reports** — export API smoke-test and security-check results for CI systems.
 - **CI/CD integration** — exits with code `0` when all checks pass, `1` when one or more checks fail, and `2` for configuration or report-writing errors.
 - **Docker support** — run the CLI in a container using an unprivileged runtime user.
-- **Automated quality checks** — pytest, Ruff, coverage enforcement, package builds, and clean-install smoke tests in GitHub Actions.
+- **Security checks (experimental)** — detect common database error disclosure and unescaped HTML reflection indicators using an explicit YAML configuration.
+- **Automated quality checks** — pytest, Ruff, coverage enforcement, package builds, API smoke tests, security-check integration tests, and clean-install verification in GitHub Actions.
 - **Python distributions** — build a wheel and source distribution.
 
 ## Requirements
@@ -148,12 +149,73 @@ api-sentinel run examples/local-tests.yaml --junit-xml report.xml
 
 The report contains a test case for each executed check and failure details for unsuccessful checks. The report path must be writable.
 
+
+## Security checks (experimental)
+
+API Sentinel includes an initial set of configuration-driven security response checks. These are intended for systems you own or are explicitly authorized to test.
+
+Start the local mock API in one terminal:
+
+```bash
+python examples/mock_api.py
+```
+
+Run the security checks in another terminal:
+
+```bash
+api-sentinel security examples/security-tests.yaml
+```
+
+Write a JUnit XML report for CI systems:
+
+```bash
+mkdir -p reports
+api-sentinel security examples/security-tests.yaml \
+  --junit-xml reports/security-results.xml
+```
+
+The example configuration targets `http://127.0.0.1:8765`, the local mock API. Do not use the example configuration against other systems without reviewing and explicitly changing the target.
+
+### Security configuration
+
+```yaml
+base_url: http://127.0.0.1:8765
+
+probes:
+  - name: Detect database error disclosure
+    path: /security/sql-error
+    check: sql_error_disclosure
+
+  - name: Detect unescaped HTML reflection
+    path: /security/reflect
+    check: unescaped_html_reflection
+    parameter: marker
+    marker: "<b>API-SENTINEL-TEST</b>"
+```
+
+Supported initial checks:
+
+- `sql_error_disclosure` — looks for common database error signatures in the response body.
+- `unescaped_html_reflection` — checks whether a configured marker is reflected verbatim in the response.
+
+Each probe has a human-readable `name`, a relative endpoint `path`, and a supported `check`. Reflection checks can also set the query-string `parameter` and the inert `marker` value.
+
+### Interpreting security results
+
+- Exit code `0`: no findings or execution errors were reported.
+- Exit code `1`: one or more findings or execution errors were reported.
+- Exit code `2`: configuration validation or JUnit report-writing failed.
+
+When `--junit-xml` is used, a detected finding is represented as a JUnit failure; an execution error is represented as a JUnit error. Passing checks are represented as successful test cases.
+
+**Important limitations:** these checks are initial indicators, not a full vulnerability scanner. A database error signature indicates possible database error disclosure; it does not prove SQL injection. Unescaped HTML reflection does not prove that a browser will execute script or that exploitable XSS exists. Use browser-based validation and a broader authorized security-testing process before treating a result as a confirmed vulnerability. The current security checks use configured GET requests and should only be run against approved targets.
+
 ## Docker
 
 Build the image from the repository root:
 
 ```bash
-docker build -t api-sentinel:0.1.0 .
+docker build -t api-sentinel:0.2.0 .
 ```
 
 Run the public-service example:
@@ -161,7 +223,7 @@ Run the public-service example:
 ```bash
 docker run --rm \
   -v "$PWD/examples:/work:ro" \
-  api-sentinel:0.1.0 \
+  api-sentinel:0.2.0 \
   run tests.yaml
 ```
 
