@@ -71,6 +71,51 @@ class MockApiHandler(BaseHTTPRequestHandler):
         else:
             self._respond(404, {"error": "Not found"})
 
+    def do_POST(self) -> None:
+        if urlsplit(self.path).path != "/users":
+            self._respond(404, {"error": "Not found"})
+            return
+
+        try:
+            content_length = int(self.headers.get("Content-Length", "0"))
+            payload = json.loads(self.rfile.read(content_length))
+        except (ValueError, UnicodeDecodeError):
+            self._respond(
+                400,
+                {"error": {"code": "invalid_json", "field": "body"}},
+            )
+            return
+
+        if not isinstance(payload, dict):
+            self._respond(
+                400,
+                {"error": {"code": "object_required", "field": "body"}},
+            )
+            return
+
+        for field in ("name", "role"):
+            value = payload.get(field)
+            if not isinstance(value, str) or not value.strip():
+                self._respond(
+                    400,
+                    {"error": {"code": f"invalid_{field}", "field": field}},
+                )
+                return
+
+        if "nickname" in payload:
+            nickname = payload["nickname"]
+            if not isinstance(nickname, str) or not nickname.strip():
+                self._respond(
+                    400,
+                    {"error": {"code": "invalid_nickname", "field": "nickname"}},
+                )
+                return
+
+        user = {"id": 1, "name": payload["name"], "role": payload["role"]}
+        if "nickname" in payload:
+            user["nickname"] = payload["nickname"]
+        self._respond(201, {"user": user})
+
     def _respond(
         self,
         status: int,
@@ -95,7 +140,8 @@ class MockApiHandler(BaseHTTPRequestHandler):
 def main() -> None:
     port = int(os.environ.get("API_SENTINEL_MOCK_PORT", "8765"))
     server = ThreadingHTTPServer(("127.0.0.1", port), MockApiHandler)
-    print(f"Mock API listening on http://127.0.0.1:{port}", flush=True)
+    bound_port = server.server_address[1]
+    print(f"Mock API listening on http://127.0.0.1:{bound_port}", flush=True)
 
     try:
         server.serve_forever()

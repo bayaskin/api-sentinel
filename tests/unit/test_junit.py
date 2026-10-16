@@ -84,3 +84,35 @@ def test_escapes_special_characters_in_junit_report(tmp_path) -> None:
 
     assert testcase.attrib["name"] == "User <admin> & permissions"
     assert failure.attrib["message"] == 'Expected "A & B", got "<unknown>"'
+
+
+def test_writes_separate_qualified_testcases_for_case_results(tmp_path) -> None:
+    report = tmp_path / "case-results.xml"
+    results = [
+        ApiTestResult(
+            name="Create item / valid input",
+            passed=True,
+            expected_status=201,
+            actual_status=201,
+        ),
+        ApiTestResult(
+            name="Create item / missing name",
+            passed=False,
+            expected_status=400,
+            actual_status=422,
+            error="expected 400, got 422",
+        ),
+    ]
+
+    write_junit_xml(results, report)
+
+    root = ET.parse(report).getroot()
+    testcases = root.findall("testcase")
+    assert root.attrib["tests"] == "2"
+    assert root.attrib["failures"] == "1"
+    assert [testcase.attrib["name"] for testcase in testcases] == [
+        "Create item / valid input",
+        "Create item / missing name",
+    ]
+    assert testcases[0].find("failure") is None
+    assert testcases[1].find("failure").attrib["message"] == "expected 400, got 422"

@@ -1,5 +1,7 @@
 
 import json
+import re
+from copy import deepcopy
 from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import urlparse
@@ -16,6 +18,12 @@ class ConfigError(Exception):
 
 
 DRAFT_2020_12_SCHEMA_URI = Draft202012Validator.META_SCHEMA["$id"]
+VARIABLE_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
+PLACEHOLDER = re.compile(
+    r"\$\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$\{([A-Za-z_][A-Za-z0-9_]*)\}"
+)
+WHOLE_PLACEHOLDER = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}\Z")
+NO_REQUEST_BODY_OVERRIDE = object()
 
 
 @dataclass(frozen=True)
@@ -109,6 +117,164 @@ def _json_schema(value: object, field_name: str) -> dict[str, object]:
     return schema
 
 
+def _expectation(value: object, field_name: str) -> ExpectConfig:
+    expect_data = _require_mapping(value, field_name)
+
+    status = expect_data.get("status")
+    if (
+        not isinstance(status, int)
+        or isinstance(status, bool)
+        or not 100 <= status <= 599
+    ):
+        raise ConfigError(
+            f"{field_name}.status must be an HTTP status code from 100 to 599"
+        )
+
+    json_assertions = _json_assertions(
+        expect_data.get("json", {}), f"{field_name}.json"
+    )
+    response_schema = None
+    if "schema" in expect_data:
+        response_schema = _json_schema(
+            expect_data["schema"], f"{field_name}.schema"
+        )
+
+    return ExpectConfig(
+        status=status,
+        json=json_assertions,
+        schema=response_schema,
+    )
+
+
+def _validate_variable_value(value: object, field_name: str) -> None:
+    def is_json_value(item: object) -> bool:
+        if item is None or type(item) in (str, int, bool, float):
+            return True
+        if isinstance(item, list):
+            return all(is_json_value(child) for child in item)
+        if isinstance(item, dict):
+            return all(
+                isinstance(key, str) and is_json_value(child)
+                for key, child in item.items()
+            )
+        return False
+
+    try:
+        if not is_json_value(value):
+            raise ValueError("value is not a JSON value")
+        json.dumps(value, allow_nan=False)
+    except (TypeError, ValueError) as exc:
+        raise ConfigError(
+            f"{field_name} must contain a valid finite JSON value"
+        ) from exc
+
+
+def _case_variables(value: object, field_name: str) -> dict[str, object]:
+    variables = _require_mapping(value, field_name)
+    for name, variable_value in variables.items():
+        if not isinstance(name, str):
+            raise ConfigError(f"{field_name} keys must be strings")
+        _validate_variable_value(variable_value, f"{field_name}.{name}")
+    return variables
+
+
+def _lookup_case_variable(
+    name: str,
+    variables: dict[str, object],
+    field_name: str,
+) -> object:
+    if name not in variables:
+        raise ConfigError(f"{field_name} references undefined variable {name!r}")
+    return variables[name]
+
+
+def _render_template_string(
+    value: str,
+    variables: dict[str, object],
+    field_name: str,
+) -> object:
+    whole_match = WHOLE_PLACEHOLDER.fullmatch(value)
+    if whole_match:
+        return deepcopy(
+            _lookup_case_variable(whole_match.group(1), variables, field_name)
+        )
+
+    rendered: list[str] = []
+    cursor = 0
+    for match in PLACEHOLDER.finditer(value):
+        between = value[cursor : match.start()]
+        if "${" in between:
+            raise ConfigError(f"{field_name} contains malformed placeholder syntax")
+        rendered.append(between)
+
+        escaped_name, name = match.groups()
+        if escaped_name is not None:
+            rendered.append("${" + escaped_name + "}")
+        else:
+            variable_value = _lookup_case_variable(name, variables, field_name)
+            if isinstance(variable_value, (dict, list)):
+                raise ConfigError(
+                    f"{field_name} cannot embed array or object variable {name!r}"
+                )
+            if isinstance(variable_value, str):
+                rendered.append(variable_value)
+            else:
+                rendered.append(json.dumps(variable_value, allow_nan=False))
+        cursor = match.end()
+
+    remainder = value[cursor:]
+    if "${" in remainder:
+        raise ConfigError(f"{field_name} contains malformed placeholder syntax")
+    rendered.append(remainder)
+    return "".join(rendered)
+
+
+def _substitute_json_values(
+    value: object,
+    variables: dict[str, object],
+    field_name: str,
+) -> object:
+    if isinstance(value, dict):
+        return {
+            key: _substitute_json_values(child, variables, field_name)
+            for key, child in value.items()
+        }
+    if isinstance(value, list):
+        return [
+            _substitute_json_values(child, variables, field_name)
+            for child in value
+        ]
+    if isinstance(value, str):
+        return _render_template_string(value, variables, field_name)
+    return deepcopy(value)
+
+
+def _request_config(
+    prefix: str,
+    method: str,
+    path: str,
+    headers: dict[str, str],
+    params: dict[str, str],
+    body: object,
+) -> RequestConfig:
+    if body is not None:
+        if not isinstance(body, (dict, list)):
+            raise ConfigError(f"{prefix}.request.json must be a mapping or list")
+        try:
+            json.dumps(body, allow_nan=False)
+        except (TypeError, ValueError) as exc:
+            raise ConfigError(
+                f"{prefix}.request.json must contain valid JSON values"
+            ) from exc
+    return RequestConfig(
+        method=method.upper(),
+        path=path,
+        headers=deepcopy(headers),
+        params=deepcopy(params),
+        json=body,
+    )
+
+
 def load_config(path: str | Path) -> SentinelConfig:
     """Load and validate an API Sentinel YAML configuration."""
     config_path = Path(path)
@@ -192,46 +358,78 @@ def load_config(path: str | Path) -> SentinelConfig:
                     f"{prefix}.request.json must contain valid JSON values"
                 ) from exc
 
-        expect_data = _require_mapping(
-            test_data.get("expect"), f"{prefix}.expect"
-        )
+        if "cases" not in test_data:
+            tests.append(
+                ApiTestConfig(
+                    name=name.strip(),
+                    request=_request_config(
+                        prefix, method, request_path, headers, params, json_body
+                    ),
+                    expect=_expectation(
+                        test_data.get("expect"), f"{prefix}.expect"
+                    ),
+                )
+            )
+            continue
 
-        status = expect_data.get("status")
-        if (
-            not isinstance(status, int)
-            or isinstance(status, bool)
-            or not 100 <= status <= 599
-        ):
+        if "expect" in test_data:
             raise ConfigError(
-                f"{prefix}.expect.status must be an HTTP status code from 100 to 599"
+                f"{prefix}.expect cannot be combined with cases; define an "
+                "expectation for every case"
             )
 
-        json_assertions = _json_assertions(
-            expect_data.get("json", {}),
-            f"{prefix}.expect.json",
-        )
-        response_schema = None
-        if "schema" in expect_data:
-            response_schema = _json_schema(
-                expect_data["schema"], f"{prefix}.expect.schema"
+        raw_cases = test_data["cases"]
+        if not isinstance(raw_cases, list) or not raw_cases:
+            raise ConfigError(f"{prefix}.cases must be a non-empty list")
+
+        for case_index, raw_case in enumerate(raw_cases):
+            case_prefix = f"{prefix}.cases[{case_index}]"
+            case_data = _require_mapping(raw_case, case_prefix)
+
+            case_name = case_data.get("name")
+            if not isinstance(case_name, str) or not case_name.strip():
+                raise ConfigError(f"{case_prefix}.name must be a non-empty string")
+
+            variables = _case_variables(
+                case_data.get("variables"), f"{case_prefix}.variables"
             )
 
-        tests.append(
-            ApiTestConfig(
-                name=name.strip(),
-                request=RequestConfig(
-                    method=method.upper(),
-                    path=request_path,
-                    headers=headers,
-                    params=params,
-                    json=json_body,
-                ),
-                expect=ExpectConfig(
-                    status=status,
-                    json=json_assertions,
-                    schema=response_schema,
-                ),
+            case_request_data: dict = {}
+            if "request" in case_data:
+                case_request_data = _require_mapping(
+                    case_data["request"], f"{case_prefix}.request"
+                )
+                unsupported_request_fields = set(case_request_data) - {"json"}
+                if unsupported_request_fields:
+                    field = min(unsupported_request_fields, key=str)
+                    raise ConfigError(
+                        f"{case_prefix}.request.{field} is not supported; "
+                        "only JSON body replacement is allowed"
+                    )
+
+            override = case_request_data.get("json", NO_REQUEST_BODY_OVERRIDE)
+            case_body = json_body if override is NO_REQUEST_BODY_OVERRIDE else override
+            if case_body is not None:
+                case_body = _substitute_json_values(
+                    case_body, variables, f"{case_prefix}.request.json"
+                )
+            for variable_name in variables:
+                if not VARIABLE_NAME.fullmatch(variable_name):
+                    raise ConfigError(
+                        f"{case_prefix}.variables keys must be valid "
+                        "variable identifiers"
+                    )
+
+            tests.append(
+                ApiTestConfig(
+                    name=f"{name.strip()} / {case_name.strip()}",
+                    request=_request_config(
+                        prefix, method, request_path, headers, params, case_body
+                    ),
+                    expect=_expectation(
+                        case_data.get("expect"), f"{case_prefix}.expect"
+                    ),
+                )
             )
-        )
 
     return SentinelConfig(base_url=base_url.rstrip("/"), tests=tests)

@@ -195,6 +195,61 @@ api-sentinel run examples/schema-tests.yaml
 
 These checks verify documented API behavior. JSON Schema and expected-error assertions are not a substitute for a full security scanner.
 
+### Data-driven cases
+
+Add an optional `cases` list to a test to run one request definition with multiple inputs. Each case expands into an independent test named `Parent test / case name`. Cases run in YAML order, and a failed case does not stop later cases. Every case needs its own complete `expect` block; a parent-level `expect` cannot be combined with `cases`.
+
+A case can replace the parent JSON request body with `request.json`. This is a complete replacement, not a merge. If the case omits `request.json`, it uses the parent body. Existing configurations without `cases` continue to work as before.
+
+Each case declares its own `variables` mapping. In JSON request-body values, `${identifier}` references a case variable; identifiers start with a letter or underscore and contain only letters, digits, and underscores. An undefined variable is a configuration error, while a variable explicitly set to `null` is defined. Unused variables are allowed.
+
+A placeholder that occupies a whole value preserves the variable's JSON type, including strings, numbers, Booleans, null, arrays, and objects. Embedded placeholders accept scalar values: strings are inserted as text, while numbers use JSON number text and Booleans and null become `true`, `false`, and `null`. Use `$${name}` to write the literal `${name}` without substitution.
+
+Substitution applies only to JSON request-body values. It does not apply to object keys, paths, headers, query parameters, expectations, or schemas. Malformed placeholders, undefined references, non-JSON values, non-finite numbers, and embedded arrays or objects are configuration errors.
+
+The [data-driven example](examples/data-driven-tests.yaml) demonstrates valid input, a complete body override that omits the required `name`, an empty required value, and a typed Boolean value. Its case definitions include their own expectations:
+
+```yaml
+  - name: Create a user
+    request:
+      method: POST
+      path: /users
+      json:
+        name: "${name}"
+        role: "${role}"
+        nickname: "${nickname}"
+    cases:
+      - name: valid user
+        variables: {name: Ada Lovelace, role: member, nickname: Ada}
+        expect:
+          status: 201
+          json: {user.id: 1, user.name: Ada Lovelace}
+      - name: missing required name
+        variables: {role: member, nickname: Ada}
+        request:
+          json: {role: "${role}", nickname: "${nickname}"}
+        expect:
+          status: 400
+          json: {error.code: invalid_name, error.field: name}
+```
+
+To run the complete example, start the repository's mock API in one terminal. It uses port `8765` by default. If that port is occupied, start it on an OS-selected free port with `API_SENTINEL_MOCK_PORT=0`; the server prints the port it actually bound to. For example:
+
+```bash
+API_SENTINEL_MOCK_PORT=0 python examples/mock_api.py
+```
+
+Keep that server running. In a second terminal, set `MOCK_PORT` to the port printed by the server, make a temporary copy of the example with its base URL updated, and run the CLI from the repository root:
+
+```bash
+MOCK_PORT=<port-printed-by-server>
+sed "s|http://127.0.0.1:8765|http://127.0.0.1:${MOCK_PORT}|" \
+  examples/data-driven-tests.yaml > /tmp/data-driven-tests.yaml
+api-sentinel run /tmp/data-driven-tests.yaml
+```
+
+If port `8765` is available, the simpler default procedure is `python examples/mock_api.py` followed by `api-sentinel run examples/data-driven-tests.yaml`. Data-driven cases exercise configured API behavior; they do not provide response extraction, chained workflows, automatic fuzzing, or performance testing. API Sentinel remains a smoke-testing CLI, not a production server or a full contract-testing platform.
+
 ## Exit codes
 
 | Code | Meaning |
@@ -281,7 +336,7 @@ When `--junit-xml` is used, a detected finding is represented as a JUnit failure
 Build the image from the repository root:
 
 ```bash
-docker build -t api-sentinel:0.3.0 .
+docker build -t api-sentinel:0.4.0 .
 ```
 
 Run the public-service example:
@@ -289,7 +344,7 @@ Run the public-service example:
 ```bash
 docker run --rm \
   -v "$PWD/examples:/work:ro" \
-  api-sentinel:0.3.0 \
+  api-sentinel:0.4.0 \
   run tests.yaml
 ```
 

@@ -1,12 +1,14 @@
 
 import httpx
 import pytest
+import yaml
 
 from api_sentinel.config import (
     ApiTestConfig,
     ExpectConfig,
     RequestConfig,
     SentinelConfig,
+    load_config,
 )
 from api_sentinel.runner import _get_json_path, run_tests
 
@@ -620,5 +622,195 @@ def test_limits_reported_schema_violations_and_indicates_omissions() -> None:
     assert "$[9]" in result.error
     assert "$[10]" not in result.error
     assert "additional schema violations omitted after 10" in result.error
+
+
+def test_expanded_cases_execute_in_order_and_continue_after_failure(
+    tmp_path,
+) -> None:
+    raw = {
+        "base_url": "https://api.example.com",
+        "tests": [{
+            "name": "Create item",
+            "request": {
+                "method": "POST",
+                "path": "/items",
+                "json": {"value": "${value}"},
+            },
+            "cases": [
+                {
+                    "name": "first",
+                    "variables": {"value": "one"},
+                    "expect": {"status": 201},
+                },
+                {
+                    "name": "fails",
+                    "variables": {"value": "two"},
+                    "expect": {"status": 201},
+                },
+                {
+                    "name": "last",
+                    "variables": {"value": "three"},
+                    "expect": {"status": 201},
+                },
+            ],
+        }],
+    }
+    config_file = tmp_path / "cases.yaml"
+    config_file.write_text(yaml.safe_dump(raw, sort_keys=False), encoding="utf-8")
+    config = load_config(config_file)
+    sent_bodies = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = request.read()
+        sent_bodies.append(body)
+        status = 500 if b'"two"' in body else 201
+        return httpx.Response(status, json={"accepted": True}, request=request)
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    try:
+        results = run_tests(config, client=client)
+    finally:
+        client.close()
+
+    assert sent_bodies == [
+        b'{"value":"one"}',
+        b'{"value":"two"}',
+        b'{"value":"three"}',
+    ]
+    assert [result.name for result in results] == [
+        "Create item / first",
+        "Create item / fails",
+        "Create item / last",
+    ]
+    assert [result.passed for result in results] == [True, False, True]
+    assert results[1].error == "expected 201, got 500"
+
+
+def test_case_transport_error_does_not_stop_later_expanded_cases(tmp_path) -> None:
+    raw = {
+        "base_url": "https://api.example.com",
+        "tests": [{
+            "name": "Read item",
+            "request": {
+                "method": "POST",
+                "path": "/items",
+                "json": {"value": "${value}"},
+            },
+            "cases": [
+                {
+                    "name": "transport failure",
+                    "variables": {"value": "offline"},
+                    "expect": {"status": 200},
+                },
+                {
+                    "name": "schema and exact assertion",
+                    "variables": {"value": "online"},
+                    "expect": {
+                        "status": 200,
+                        "json": {"result": "ok"},
+                        "schema": {
+                            "type": "object",
+                            "required": ["result"],
+                            "properties": {"result": {"type": "string"}},
+                        },
+                    },
+                },
+            ],
+        }],
+    }
+    config_file = tmp_path / "transport-cases.yaml"
+    config_file.write_text(yaml.safe_dump(raw, sort_keys=False), encoding="utf-8")
+    config = load_config(config_file)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if b"offline" in request.read():
+            raise httpx.ConnectError("connection refused", request=request)
+        return httpx.Response(200, json={"result": "ok"}, request=request)
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    try:
+        results = run_tests(config, client=client)
+    finally:
+        client.close()
+
+    assert [result.name for result in results] == [
+        "Read item / transport failure",
+        "Read item / schema and exact assertion",
+    ]
+    assert results[0].passed is False
+    assert "connection refused" in results[0].error
+    assert results[1].passed is True
+
+
+def test_cli_reports_qualified_case_results_and_continues_after_failure(
+    tmp_path,
+    monkeypatch,
+    capsys,
+) -> None:
+    from api_sentinel.cli import main
+
+    raw = {
+        "base_url": "https://api.example.com",
+        "tests": [{
+            "name": "Create item",
+            "request": {
+                "method": "POST",
+                "path": "/items",
+                "json": {"value": "${value}"},
+            },
+            "cases": [
+                {
+                    "name": "first",
+                    "variables": {"value": "one"},
+                    "expect": {"status": 201},
+                },
+                {
+                    "name": "fails",
+                    "variables": {"value": "two"},
+                    "expect": {"status": 201},
+                },
+                {
+                    "name": "last",
+                    "variables": {"value": "three"},
+                    "expect": {"status": 201},
+                },
+            ],
+        }],
+    }
+    config_file = tmp_path / "cli-cases.yaml"
+    config_file.write_text(yaml.safe_dump(raw, sort_keys=False), encoding="utf-8")
+    sent_bodies: list[bytes] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = request.read()
+        sent_bodies.append(body)
+        status = 500 if b'"two"' in body else 201
+        return httpx.Response(status, request=request)
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    from api_sentinel.runner import run_tests as execute_tests
+
+    monkeypatch.setattr(
+        "api_sentinel.cli.run_tests",
+        lambda config: execute_tests(config, client=client),
+    )
+    try:
+        exit_code = main(["run", str(config_file)])
+    finally:
+        client.close()
+
+    output = capsys.readouterr().out
+    assert exit_code == 1
+    assert [line for line in output.splitlines() if "Create item /" in line] == [
+        "  PASS  Create item / first (expected 201, got 201)",
+        "  FAIL  Create item / fails (expected 201, got 500)",
+        "  PASS  Create item / last (expected 201, got 201)",
+    ]
+    assert "Results: 2 passed, 1 failed" in output
+    assert sent_bodies == [
+        b'{"value":"one"}',
+        b'{"value":"two"}',
+        b'{"value":"three"}',
+    ]
 
 

@@ -1,0 +1,60 @@
+base_url: http://127.0.0.1:8765
+
+tests:
+  - name: Create a user
+    request:
+      method: POST
+      path: /users
+      json:
+        name: "${name}"
+        role: "${role}"
+        nickname: "${nickname}"
+    cases:
+      - name: valid user
+        variables:
+          name: Ada Lovelace
+          role: member
+          nickname: Ada
+        expect:
+          status: 201
+          json:
+            user.id: 1
+            user.name: Ada Lovelace
+            user.role: member
+            user.nickname: Ada
+
+      - name: missing required name
+        variables:
+          role: member
+          nickname: Ada
+        request:
+          json:
+            role: "${role}"
+            nickname: "${nickname}"
+        expect:
+          status: 400
+          json:
+            error.code: invalid_name
+            error.field: name
+
+      - name: empty required name
+        variables:
+          name: ""
+          role: member
+          nickname: Ada
+        expect:
+          status: 400
+          json:
+            error.code: invalid_name
+            error.field: name
+
+      - name: Boolean nickname remains a Boolean and is rejected
+        variables:
+          name: Ada Lovelace
+          role: member
+          nickname: false
+        expect:
+          status: 400
+          json:
+            error.code: invalid_nickname
+            error.field: nickname
